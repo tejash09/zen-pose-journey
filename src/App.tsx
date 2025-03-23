@@ -9,15 +9,16 @@ import Practice from "./pages/Practice";
 import PoseLibrary from "./pages/PoseLibrary";
 import Settings from "./pages/Settings";
 import NotFound from "./pages/NotFound";
+import Layout from "./components/layout/Layout";
 
 const queryClient = new QueryClient();
 
 const App = () => (
   <QueryClientProvider client={queryClient}>
     <TooltipProvider>
-      <Toaster />
-      <Sonner />
       <BrowserRouter>
+        <Toaster />
+        <Sonner />
         <Routes>
           <Route path="/" element={<Index />} />
           <Route path="/practice" element={<Practice />} />
