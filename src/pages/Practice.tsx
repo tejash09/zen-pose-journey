@@ -1,8 +1,8 @@
-
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import Layout from "@/components/layout/Layout";
 import { WebcamView } from "@/components/practice/WebcamView";
 import { PoseInfo } from "@/components/practice/PoseInfo";
+import { ScreenCapture } from "@/components/practice/ScreenCapture";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { motion } from "framer-motion";
@@ -11,6 +11,7 @@ import { Link } from "react-router-dom";
 import { toast } from "sonner";
 
 const Practice = () => {
+  const videoRef = useRef<HTMLVideoElement>(null);
   const [isActive, setIsActive] = useState(false);
   const [sessionTime, setSessionTime] = useState(0);
   const [posesDetected, setPosesDetected] = useState(0);
@@ -21,7 +22,6 @@ const Practice = () => {
     duration: 0,
   });
   
-  // Mock poses for demonstration
   const mockPoses = [
     { name: "Mountain Pose (Tadasana)", confidence: 92 },
     { name: "Downward Dog (Adho Mukha Svanasana)", confidence: 87 },
@@ -33,12 +33,10 @@ const Practice = () => {
   const detectPoseSimulation = useCallback(() => {
     if (!isActive) return;
     
-    // Randomly select a pose from our mock poses
     const randomIndex = Math.floor(Math.random() * mockPoses.length);
     const selectedPose = mockPoses[randomIndex];
     
-    // Add a little randomness to confidence for realism
-    const confidenceVariation = Math.floor(Math.random() * 10) - 5; // -5 to +5
+    const confidenceVariation = Math.floor(Math.random() * 10) - 5;
     const adjustedConfidence = Math.min(100, Math.max(0, selectedPose.confidence + confidenceVariation));
     
     setCurrentPose(prev => {
@@ -61,7 +59,6 @@ const Practice = () => {
     });
   }, [isActive, mockPoses]);
 
-  // Session timer
   useEffect(() => {
     let interval: number | null = null;
     
@@ -76,15 +73,12 @@ const Practice = () => {
     };
   }, [isActive]);
   
-  // Pose detection simulation
   useEffect(() => {
     let poseInterval: number | null = null;
     
     if (isActive) {
-      // Initial detection
       detectPoseSimulation();
       
-      // Periodically update pose detection
       poseInterval = window.setInterval(() => {
         detectPoseSimulation();
       }, 3000);
@@ -119,7 +113,6 @@ const Practice = () => {
     toast.success("Session reset");
   };
   
-  // Format time from seconds to HH:MM:SS
   const formatTime = (totalSeconds: number) => {
     const hours = Math.floor(totalSeconds / 3600);
     const minutes = Math.floor((totalSeconds % 3600) / 60);
@@ -132,7 +125,6 @@ const Practice = () => {
     ].join(':');
   };
   
-  // Calculate average confidence
   const averageConfidence = posesDetected > 0 
     ? Math.round(totalConfidence / posesDetected) 
     : 0;
@@ -161,9 +153,9 @@ const Practice = () => {
             animate={{ opacity: 1, x: 0 }}
             transition={{ duration: 0.5, delay: 0.2 }}
           >
-            <WebcamView isActive={isActive} />
+            <WebcamView isActive={isActive} videoRef={videoRef} />
             
-            <div className="flex justify-center gap-4 mt-4">
+            <div className="flex flex-wrap justify-center gap-4 mt-4">
               <Button 
                 onClick={toggleActive}
                 className={isActive ? "bg-red-500 hover:bg-red-600" : "bg-sage-400 hover:bg-sage-500"}
@@ -181,6 +173,10 @@ const Practice = () => {
                   Settings
                 </Link>
               </Button>
+            </div>
+            
+            <div className="mt-4">
+              <ScreenCapture videoRef={videoRef} isActive={isActive} />
             </div>
           </motion.div>
 

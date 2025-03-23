@@ -5,10 +5,12 @@ import { toast } from "sonner";
 
 interface WebcamViewProps {
   isActive: boolean;
+  videoRef?: React.RefObject<HTMLVideoElement>;
 }
 
-export const WebcamView: React.FC<WebcamViewProps> = ({ isActive }) => {
-  const videoRef = useRef<HTMLVideoElement>(null);
+export const WebcamView: React.FC<WebcamViewProps> = ({ isActive, videoRef: externalVideoRef }) => {
+  const internalVideoRef = useRef<HTMLVideoElement>(null);
+  const videoRef = externalVideoRef || internalVideoRef;
   const [hasPermission, setHasPermission] = useState<boolean | null>(null);
   const [webcamError, setWebcamError] = useState<string | null>(null);
 
@@ -65,7 +67,7 @@ export const WebcamView: React.FC<WebcamViewProps> = ({ isActive }) => {
     return () => {
       stopWebcam();
     };
-  }, [isActive]);
+  }, [isActive, videoRef]);
 
   return (
     <Card className="overflow-hidden relative aspect-video bg-gray-100 flex items-center justify-center border-2 border-sage-100">
