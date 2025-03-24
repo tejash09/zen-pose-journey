@@ -2,17 +2,24 @@
 import React, { useRef, useEffect, useState } from "react";
 import { Card } from "@/components/ui/card";
 import { toast } from "sonner";
+import { PoseOverlay } from "./PoseOverlay";
 
 interface WebcamViewProps {
   isActive: boolean;
   videoRef?: React.RefObject<HTMLVideoElement>;
+  keypoints?: number[][] | null;
 }
 
-export const WebcamView: React.FC<WebcamViewProps> = ({ isActive, videoRef: externalVideoRef }) => {
+export const WebcamView: React.FC<WebcamViewProps> = ({ 
+  isActive, 
+  videoRef: externalVideoRef,
+  keypoints 
+}) => {
   const internalVideoRef = useRef<HTMLVideoElement>(null);
   const videoRef = externalVideoRef || internalVideoRef;
   const [hasPermission, setHasPermission] = useState<boolean | null>(null);
   const [webcamError, setWebcamError] = useState<string | null>(null);
+  const [videoDimensions, setVideoDimensions] = useState({ width: 0, height: 0 });
 
   useEffect(() => {
     let stream: MediaStream | null = null;
@@ -33,6 +40,17 @@ export const WebcamView: React.FC<WebcamViewProps> = ({ isActive, videoRef: exte
           videoRef.current.srcObject = stream;
           setHasPermission(true);
           setWebcamError(null);
+          
+          // Set video dimensions once the metadata is loaded
+          videoRef.current.onloadedmetadata = () => {
+            if (videoRef.current) {
+              setVideoDimensions({
+                width: videoRef.current.videoWidth,
+                height: videoRef.current.videoHeight
+              });
+            }
+          };
+          
           toast.success("Webcam started successfully");
         }
       } catch (error) {
@@ -80,6 +98,15 @@ export const WebcamView: React.FC<WebcamViewProps> = ({ isActive, videoRef: exte
             muted
             className={`w-full h-full object-cover ${hasPermission === false ? 'hidden' : ''}`}
           />
+          
+          {/* Render pose keypoints overlay when available */}
+          {keypoints && hasPermission && videoDimensions.width > 0 && (
+            <PoseOverlay 
+              keypoints={keypoints} 
+              videoWidth={videoDimensions.width} 
+              videoHeight={videoDimensions.height} 
+            />
+          )}
           
           {hasPermission === false && (
             <div className="absolute inset-0 flex flex-col items-center justify-center p-6 text-center">

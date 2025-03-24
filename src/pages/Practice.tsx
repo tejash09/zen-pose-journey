@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import Layout from "@/components/layout/Layout";
 import { WebcamView } from "@/components/practice/WebcamView";
@@ -9,6 +10,7 @@ import { motion } from "framer-motion";
 import { Play, Pause, RefreshCw, Settings } from "lucide-react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
+import { checkApiHealth, loadModels, detectPose, captureVideoFrame } from "@/services/poseDetectionService";
 
 const Practice = () => {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -21,44 +23,104 @@ const Practice = () => {
     confidence: 0,
     duration: 0,
   });
+  const [apiStatus, setApiStatus] = useState<"loading" | "ready" | "error">("loading");
+  const [currentKeypoints, setCurrentKeypoints] = useState<number[][] | null>(null);
+  const [availablePoses, setAvailablePoses] = useState<string[]>([]);
+  const [lastPoseName, setLastPoseName] = useState<string>("");
   
-  const mockPoses = [
-    { name: "Mountain Pose (Tadasana)", confidence: 92 },
-    { name: "Downward Dog (Adho Mukha Svanasana)", confidence: 87 },
-    { name: "Warrior I (Virabhadrasana I)", confidence: 85 },
-    { name: "Tree Pose (Vrikshasana)", confidence: 88 },
-    { name: "Triangle Pose (Trikonasana)", confidence: 83 }
-  ];
-  
-  const detectPoseSimulation = useCallback(() => {
-    if (!isActive) return;
-    
-    const randomIndex = Math.floor(Math.random() * mockPoses.length);
-    const selectedPose = mockPoses[randomIndex];
-    
-    const confidenceVariation = Math.floor(Math.random() * 10) - 5;
-    const adjustedConfidence = Math.min(100, Math.max(0, selectedPose.confidence + confidenceVariation));
-    
-    setCurrentPose(prev => {
-      const isNewPose = prev.name !== selectedPose.name;
-      const newDuration = isNewPose ? 0 : prev.duration + 3;
-      
-      if (isNewPose && prev.name !== "Waiting for pose...") {
-        setPosesDetected(count => count + 1);
-        setTotalConfidence(total => total + adjustedConfidence);
-        toast.info(`Detected: ${selectedPose.name}`, {
-          description: `Confidence: ${adjustedConfidence}%`
+  // Check API health and load models when component mounts
+  useEffect(() => {
+    const initializeApi = async () => {
+      try {
+        const health = await checkApiHealth();
+        if (health.status === "healthy") {
+          if (!health.modelsLoaded) {
+            toast.info("Loading pose detection models...");
+            const poses = await loadModels();
+            setAvailablePoses(poses);
+            toast.success("Pose detection models loaded", {
+              description: `${poses.length} poses available for detection`
+            });
+          } else {
+            // Models already loaded, just get the available poses
+            const poses = await loadModels();
+            setAvailablePoses(poses);
+          }
+          setApiStatus("ready");
+        } else {
+          throw new Error("API is not healthy");
+        }
+      } catch (error) {
+        console.error("Error initializing API:", error);
+        setApiStatus("error");
+        toast.error("Failed to connect to pose detection API", {
+          description: "Please ensure the Python API is running on your server"
         });
       }
+    };
+    
+    initializeApi();
+  }, []);
+  
+  // Real pose detection using the API
+  const detectPoseFromVideo = useCallback(async () => {
+    if (!isActive || !videoRef.current || apiStatus !== "ready") return;
+    
+    try {
+      // Capture the current video frame
+      const imageData = captureVideoFrame(videoRef.current);
+      if (!imageData) return;
       
-      return {
-        name: selectedPose.name,
-        confidence: adjustedConfidence,
-        duration: newDuration
-      };
-    });
-  }, [isActive, mockPoses]);
-
+      // Send to API for detection
+      const result = await detectPose(imageData);
+      
+      if (result.error) {
+        console.error("Error detecting pose:", result.error);
+        return;
+      }
+      
+      // Save keypoints for visualization
+      if (result.keypoints) {
+        setCurrentKeypoints(result.keypoints);
+      }
+      
+      const poseName = result.pose_name;
+      const confidence = Math.round(result.confidence * 100);
+      
+      setCurrentPose(prev => {
+        const isNewPose = poseName !== lastPoseName && poseName !== "Not enough keypoints visible";
+        const newDuration = isNewPose ? 0 : prev.duration + 1;
+        
+        if (isNewPose && lastPoseName && lastPoseName !== "Not enough keypoints visible" && lastPoseName !== "Waiting for pose...") {
+          setPosesDetected(count => count + 1);
+          setTotalConfidence(total => total + confidence);
+          toast.info(`Detected: ${poseName}`, {
+            description: `Confidence: ${confidence}%`
+          });
+        }
+        
+        // Update the last detected pose name
+        if (poseName !== "Not enough keypoints visible") {
+          setLastPoseName(poseName);
+        }
+        
+        return {
+          name: poseName,
+          confidence: confidence,
+          duration: newDuration
+        };
+      });
+    } catch (error) {
+      console.error("Error in pose detection:", error);
+      if (isActive) {
+        toast.error("Pose detection failed", {
+          description: "Check console for details"
+        });
+      }
+    }
+  }, [isActive, apiStatus, lastPoseName]);
+  
+  // Session timer
   useEffect(() => {
     let interval: number | null = null;
     
@@ -73,23 +135,33 @@ const Practice = () => {
     };
   }, [isActive]);
   
+  // Setup pose detection interval
   useEffect(() => {
     let poseInterval: number | null = null;
     
-    if (isActive) {
-      detectPoseSimulation();
+    if (isActive && apiStatus === "ready") {
+      // Detect pose immediately
+      detectPoseFromVideo();
       
+      // Then set up interval
       poseInterval = window.setInterval(() => {
-        detectPoseSimulation();
-      }, 3000);
+        detectPoseFromVideo();
+      }, 1000); // Check pose every second
     }
     
     return () => {
       if (poseInterval) clearInterval(poseInterval);
     };
-  }, [isActive, detectPoseSimulation]);
-
+  }, [isActive, detectPoseFromVideo, apiStatus]);
+  
   const toggleActive = () => {
+    if (apiStatus !== "ready") {
+      toast.error("Pose detection API not ready", {
+        description: "Please ensure the Python API is running on your server"
+      });
+      return;
+    }
+    
     if (!isActive) {
       toast.success("Session started", {
         description: "Move slowly and hold poses for accurate detection"
@@ -107,9 +179,11 @@ const Practice = () => {
     setTotalConfidence(0);
     setCurrentPose({
       name: "Waiting for pose...",
-      confidence: 0,
+    confidence: 0,
       duration: 0,
     });
+    setCurrentKeypoints(null);
+    setLastPoseName("");
     toast.success("Session reset");
   };
   
@@ -144,6 +218,17 @@ const Practice = () => {
           <p className="text-lg text-gray-600 max-w-2xl mx-auto">
             Use your webcam to get real-time feedback on your yoga poses. Position yourself in view of the camera and strike a pose.
           </p>
+          {apiStatus === "error" && (
+            <div className="mt-4 p-3 bg-red-100 text-red-800 rounded-md">
+              <p className="font-medium">Pose detection API not connected</p>
+              <p className="text-sm">Please ensure the Python API is running on your server</p>
+            </div>
+          )}
+          {apiStatus === "loading" && (
+            <div className="mt-4 p-3 bg-yellow-100 text-yellow-800 rounded-md">
+              <p className="font-medium">Connecting to pose detection API...</p>
+            </div>
+          )}
         </motion.div>
 
         <div className="flex flex-col lg:flex-row gap-6">
@@ -153,12 +238,17 @@ const Practice = () => {
             animate={{ opacity: 1, x: 0 }}
             transition={{ duration: 0.5, delay: 0.2 }}
           >
-            <WebcamView isActive={isActive} videoRef={videoRef} />
+            <WebcamView 
+              isActive={isActive} 
+              videoRef={videoRef} 
+              keypoints={currentKeypoints}
+            />
             
             <div className="flex flex-wrap justify-center gap-4 mt-4">
               <Button 
                 onClick={toggleActive}
                 className={isActive ? "bg-red-500 hover:bg-red-600" : "bg-sage-400 hover:bg-sage-500"}
+                disabled={apiStatus !== "ready"}
               >
                 {isActive ? <Pause className="mr-2 h-4 w-4" /> : <Play className="mr-2 h-4 w-4" />}
                 {isActive ? "Pause" : "Start"}
@@ -210,6 +300,16 @@ const Practice = () => {
                       <p className="text-sm text-gray-500">Average Confidence</p>
                       <p className="text-2xl font-semibold">{averageConfidence}%</p>
                     </div>
+                    {availablePoses.length > 0 && (
+                      <div>
+                        <p className="text-sm text-gray-500">Available Poses</p>
+                        <ul className="mt-2 text-sm text-gray-700 space-y-1">
+                          {availablePoses.map((pose, index) => (
+                            <li key={index}>• {pose}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
                   </div>
                 </div>
               </TabsContent>
