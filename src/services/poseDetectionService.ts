@@ -41,6 +41,10 @@ export const loadModels = async (): Promise<string[]> => {
   }
 };
 
+// Track last detection time for throttling
+let lastDetectionTime = 0;
+const THROTTLE_MS = 100; // Minimum time between detections (milliseconds)
+
 /**
  * Detect pose in the provided image data
  */
@@ -52,6 +56,13 @@ export const detectPose = async (imageData: string): Promise<{
   error?: string;
 }> => {
   try {
+    const now = Date.now();
+    if (now - lastDetectionTime < THROTTLE_MS) {
+      throw new Error("Detection throttled");
+    }
+    
+    lastDetectionTime = now;
+    
     const response = await fetch(`${API_URL}/detect_pose`, {
       method: "POST",
       headers: {
@@ -68,20 +79,34 @@ export const detectPose = async (imageData: string): Promise<{
     
     return data;
   } catch (error) {
+    if ((error as Error).message === "Detection throttled") {
+      // Silent failure for throttled requests
+      return {
+        pose_name: "throttled",
+        confidence: 0,
+        is_correct: false
+      };
+    }
+    
     console.error("Error detecting pose:", error);
     throw new Error("Failed to detect pose");
   }
 };
 
 /**
- * Capture current frame from video element
+ * Capture current frame from video element with optional quality/size reduction
  */
-export const captureVideoFrame = (videoElement: HTMLVideoElement): string | null => {
+export const captureVideoFrame = (
+  videoElement: HTMLVideoElement, 
+  quality = 0.7, 
+  scaleDown = 0.5
+): string | null => {
   if (!videoElement) return null;
   
   const canvas = document.createElement("canvas");
-  canvas.width = videoElement.videoWidth;
-  canvas.height = videoElement.videoHeight;
+  // Scale down the image to improve performance
+  canvas.width = videoElement.videoWidth * scaleDown;
+  canvas.height = videoElement.videoHeight * scaleDown;
   
   const ctx = canvas.getContext("2d");
   if (!ctx) return null;
@@ -89,6 +114,6 @@ export const captureVideoFrame = (videoElement: HTMLVideoElement): string | null
   // Draw the current video frame to the canvas
   ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
   
-  // Convert to base64
-  return canvas.toDataURL("image/jpeg", 0.9);
+  // Convert to base64 with reduced quality
+  return canvas.toDataURL("image/jpeg", quality);
 };

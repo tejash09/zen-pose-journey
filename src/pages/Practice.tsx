@@ -14,6 +14,7 @@ import { checkApiHealth, loadModels, detectPose, captureVideoFrame } from "@/ser
 
 const Practice = () => {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const requestRef = useRef<number | null>(null);
   const [isActive, setIsActive] = useState(false);
   const [sessionTime, setSessionTime] = useState(0);
   const [posesDetected, setPosesDetected] = useState(0);
@@ -27,6 +28,7 @@ const Practice = () => {
   const [currentKeypoints, setCurrentKeypoints] = useState<number[][] | null>(null);
   const [availablePoses, setAvailablePoses] = useState<string[]>([]);
   const [lastPoseName, setLastPoseName] = useState<string>("");
+  const isDetecting = useRef<boolean>(false);
   
   // Check API health and load models when component mounts
   useEffect(() => {
@@ -64,18 +66,30 @@ const Practice = () => {
   
   // Real pose detection using the API
   const detectPoseFromVideo = useCallback(async () => {
-    if (!isActive || !videoRef.current || apiStatus !== "ready") return;
+    if (!isActive || !videoRef.current || apiStatus !== "ready" || isDetecting.current) return;
+    
+    isDetecting.current = true;
     
     try {
-      // Capture the current video frame
-      const imageData = captureVideoFrame(videoRef.current);
-      if (!imageData) return;
+      // Capture the current video frame with reduced quality and size
+      const imageData = captureVideoFrame(videoRef.current, 0.6, 0.5);
+      if (!imageData) {
+        isDetecting.current = false;
+        return;
+      }
       
       // Send to API for detection
       const result = await detectPose(imageData);
       
       if (result.error) {
         console.error("Error detecting pose:", result.error);
+        isDetecting.current = false;
+        return;
+      }
+      
+      // Skip if throttled
+      if (result.pose_name === "throttled") {
+        isDetecting.current = false;
         return;
       }
       
@@ -117,8 +131,18 @@ const Practice = () => {
           description: "Check console for details"
         });
       }
+    } finally {
+      isDetecting.current = false;
     }
   }, [isActive, apiStatus, lastPoseName]);
+  
+  // Animation frame based detection (more responsive than setInterval)
+  const animationFrameCallback = useCallback(() => {
+    detectPoseFromVideo();
+    if (isActive) {
+      requestRef.current = requestAnimationFrame(animationFrameCallback);
+    }
+  }, [detectPoseFromVideo, isActive]);
   
   // Session timer
   useEffect(() => {
@@ -135,24 +159,22 @@ const Practice = () => {
     };
   }, [isActive]);
   
-  // Setup pose detection interval
+  // Setup pose detection with requestAnimationFrame
   useEffect(() => {
-    let poseInterval: number | null = null;
-    
     if (isActive && apiStatus === "ready") {
-      // Detect pose immediately
-      detectPoseFromVideo();
-      
-      // Then set up interval
-      poseInterval = window.setInterval(() => {
-        detectPoseFromVideo();
-      }, 1000); // Check pose every second
+      requestRef.current = requestAnimationFrame(animationFrameCallback);
+    } else if (requestRef.current !== null) {
+      cancelAnimationFrame(requestRef.current);
+      requestRef.current = null;
     }
     
     return () => {
-      if (poseInterval) clearInterval(poseInterval);
+      if (requestRef.current !== null) {
+        cancelAnimationFrame(requestRef.current);
+        requestRef.current = null;
+      }
     };
-  }, [isActive, detectPoseFromVideo, apiStatus]);
+  }, [isActive, animationFrameCallback, apiStatus]);
   
   const toggleActive = () => {
     if (apiStatus !== "ready") {

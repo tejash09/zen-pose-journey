@@ -1,11 +1,5 @@
 
-import React from 'react';
-
-interface KeyPoint {
-  x: number;
-  y: number;
-  confidence: number;
-}
+import React, { memo } from 'react';
 
 interface PoseOverlayProps {
   keypoints: number[][] | null;
@@ -13,7 +7,8 @@ interface PoseOverlayProps {
   videoHeight: number;
 }
 
-export const PoseOverlay: React.FC<PoseOverlayProps> = ({ keypoints, videoWidth, videoHeight }) => {
+// Using React.memo to prevent unnecessary re-renders
+export const PoseOverlay: React.FC<PoseOverlayProps> = memo(({ keypoints, videoWidth, videoHeight }) => {
   if (!keypoints) return null;
   
   // Function to map the MoveNet model keypoint indices to names
@@ -39,35 +34,40 @@ export const PoseOverlay: React.FC<PoseOverlayProps> = ({ keypoints, videoWidth,
     [11, 12], [11, 13], [13, 15], [12, 14], [14, 16]
   ];
   
+  // Draw connections as a single path for better performance
+  const pathCommands: string[] = [];
+  connections.forEach((connection) => {
+    const [start, end] = connection;
+    const startPoint = keypoints[start];
+    const endPoint = keypoints[end];
+    
+    // Only draw if both points have sufficient confidence
+    if (startPoint[2] > KEYPOINT_THRESHOLD && endPoint[2] > KEYPOINT_THRESHOLD) {
+      const x1 = startPoint[1] * videoWidth;
+      const y1 = startPoint[0] * videoHeight;
+      const x2 = endPoint[1] * videoWidth;
+      const y2 = endPoint[0] * videoHeight;
+      
+      pathCommands.push(`M${x1},${y1} L${x2},${y2}`);
+    }
+  });
+  
   return (
     <svg 
       className="absolute top-0 left-0 w-full h-full"
       viewBox={`0 0 ${videoWidth} ${videoHeight}`}
       preserveAspectRatio="xMidYMid slice"
     >
-      {/* Draw connections between keypoints */}
-      {connections.map((connection, idx) => {
-        const [start, end] = connection;
-        const startPoint = keypoints[start];
-        const endPoint = keypoints[end];
-        
-        // Only draw if both points have sufficient confidence
-        if (startPoint[2] > KEYPOINT_THRESHOLD && endPoint[2] > KEYPOINT_THRESHOLD) {
-          return (
-            <line
-              key={`connection-${idx}`}
-              x1={startPoint[1] * videoWidth}
-              y1={startPoint[0] * videoHeight}
-              x2={endPoint[1] * videoWidth}
-              y2={endPoint[0] * videoHeight}
-              stroke="#4ade80"
-              strokeWidth="2"
-              opacity="0.7"
-            />
-          );
-        }
-        return null;
-      })}
+      {/* Draw all connections as a single path for better performance */}
+      {pathCommands.length > 0 && (
+        <path
+          d={pathCommands.join(' ')}
+          stroke="#4ade80"
+          strokeWidth="2"
+          fill="none"
+          opacity="0.7"
+        />
+      )}
       
       {/* Draw keypoints */}
       {keypoints.map((point, idx) => {
@@ -79,7 +79,7 @@ export const PoseOverlay: React.FC<PoseOverlayProps> = ({ keypoints, videoWidth,
               key={`keypoint-${idx}`}
               cx={point[1] * videoWidth}
               cy={point[0] * videoHeight}
-              r="4"
+              r="3"
               fill="#22c55e"
               stroke="#ffffff"
               strokeWidth="1"
@@ -92,4 +92,6 @@ export const PoseOverlay: React.FC<PoseOverlayProps> = ({ keypoints, videoWidth,
       })}
     </svg>
   );
-};
+});
+
+PoseOverlay.displayName = 'PoseOverlay';
