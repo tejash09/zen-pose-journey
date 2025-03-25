@@ -1,6 +1,5 @@
-
-// This is a mock service that simulates keypoint detection
-// In a real implementation, you would use TensorFlow.js with MoveNet
+// This file is no longer used - we're now using real TensorFlow.js MoveNet model
+// Keeping it for reference only
 
 // Example keypoint structure for a person in various poses
 const mockKeypoints = {
@@ -82,6 +81,8 @@ const addNoise = (keypoints: number[][], amount = 0.01) => {
 };
 
 export const getMockKeypoints = () => {
+  console.warn("Using mock keypoints - this function should not be called anymore");
+  
   // Randomly select one of the mock poses
   const poses = Object.keys(mockKeypoints);
   const randomPose = poses[Math.floor(Math.random() * poses.length)];
@@ -92,6 +93,8 @@ export const getMockKeypoints = () => {
 
 // Simulate an API endpoint that would normally return keypoints from MoveNet
 export const detectKeypoints = async (imageData: string): Promise<{keypoints: number[][]}> => {
+  console.warn("Using mock keypoints detection - this function should not be called anymore");
+  
   // In a real implementation, you would use TensorFlow.js to detect keypoints
   // For demo purposes, we're just returning mock data with a small delay
   await new Promise(resolve => setTimeout(resolve, 100));

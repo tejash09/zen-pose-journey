@@ -1,10 +1,11 @@
 
 import * as ort from 'onnxruntime-web';
+import * as tf from '@tensorflow/tfjs';
 import { toast } from 'sonner';
-import { detectKeypoints } from './mockKeypoints';
 
 let session: ort.InferenceSession | null = null;
 let classMapping: Record<number, string> | null = null;
+let movenetModel: any = null;
 
 // Configuration
 const CONFIDENCE_THRESHOLD = 0.7;
@@ -16,42 +17,82 @@ const KEYPOINT_THRESHOLD = 0.3;
 export const initializeOnnxModel = async (): Promise<string[]> => {
   try {
     // Check if the model is already loaded
-    if (session !== null) {
-      return classMapping ? Object.values(classMapping) : [];
+    if (session !== null && classMapping !== null) {
+      return Object.values(classMapping);
     }
 
-    toast.info("Loading ONNX model...");
+    toast.info("Loading pose models...");
     
-    // For demo purposes, simulate model loading with a delay
-    await new Promise(resolve => setTimeout(resolve, 1000));
+    // Initialize TensorFlow.js
+    await tf.ready();
+    console.log("TensorFlow.js initialized");
     
-    // In a real application, you would load the actual ONNX model
-    // session = await ort.InferenceSession.create('/models/yoga_pose_classifier.onnx');
+    // Load the ONNX model
+    try {
+      // Set WebAssembly execution providers
+      const options = {
+        executionProviders: ['wasm'],
+        graphOptimizationLevel: 'all'
+      };
+      
+      // Load the model from the public directory
+      session = await ort.InferenceSession.create(
+        '/yoga_pose_classifier.onnx', 
+        options
+      );
+      console.log("ONNX model loaded");
+    } catch (error) {
+      console.error("Error loading ONNX model:", error);
+      throw new Error(`Failed to load ONNX model: ${error.message}`);
+    }
     
-    // Simulate model loading
-    session = true as any;
+    // Load class mapping
+    try {
+      const response = await fetch('/label_mapping.json');
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      const mapping = await response.json();
+      classMapping = mapping;
+      console.log("Class mapping loaded:", classMapping);
+    } catch (error) {
+      console.error("Error loading class mapping:", error);
+      // Fallback to hardcoded class mapping
+      classMapping = {
+        0: 'Downward Dog',
+        1: 'Tree Pose',
+        2: 'Warrior I',
+        3: 'Warrior II',
+        4: 'Chair Pose',
+        5: 'Triangle Pose',
+        6: 'Cobra Pose',
+        7: 'Bridge Pose'
+      };
+      console.log("Using fallback class mapping");
+    }
     
-    // Simulate class mapping
-    classMapping = {
-      0: 'Downward Dog',
-      1: 'Tree Pose',
-      2: 'Warrior I',
-      3: 'Warrior II',
-      4: 'Chair Pose',
-      5: 'Triangle Pose',
-      6: 'Cobra Pose',
-      7: 'Bridge Pose'
-    };
+    // Load MoveNet from TensorFlow.js
+    try {
+      // We'll use the TensorFlow.js directly for MoveNet
+      movenetModel = await tf.loadGraphModel(
+        'https://tfhub.dev/google/tfjs-model/movenet/singlepose/lightning/4',
+        { fromTFHub: true }
+      );
+      console.log("MoveNet model loaded");
+    } catch (error) {
+      console.error("Error loading MoveNet model:", error);
+      throw new Error(`Failed to load MoveNet model: ${error.message}`);
+    }
     
-    toast.success("ONNX model loaded successfully");
+    toast.success("Pose detection models loaded successfully");
     
     return Object.values(classMapping);
   } catch (error) {
-    console.error("Failed to load ONNX model:", error);
-    toast.error("Failed to load ONNX model", {
+    console.error("Failed to initialize models:", error);
+    toast.error("Failed to load pose detection models", {
       description: error instanceof Error ? error.message : "Unknown error"
     });
-    return [];
+    throw error;
   }
 };
 
@@ -142,14 +183,90 @@ const runInferenceOnnx = async (embedding: Float32Array): Promise<[number, numbe
     throw new Error("ONNX model not initialized");
   }
   
-  // For demo purposes, simulate model inference
-  await new Promise(resolve => setTimeout(resolve, 50));
+  try {
+    // Create tensor from embedding
+    const tensor = new ort.Tensor('float32', embedding, [1, embedding.length]);
+    
+    // Prepare input for the model
+    const feeds = {};
+    feeds[session.inputNames[0]] = tensor;
+    
+    // Run inference
+    const results = await session.run(feeds);
+    
+    // Get output data
+    const output = results[session.outputNames[0]];
+    const predictions = output.data as Float32Array;
+    
+    // Find the class with highest probability
+    let maxProb = -Infinity;
+    let predictedClass = -1;
+    
+    for (let i = 0; i < predictions.length; i++) {
+      if (predictions[i] > maxProb) {
+        maxProb = predictions[i];
+        predictedClass = i;
+      }
+    }
+    
+    // Apply softmax to get probability
+    const expValues = Array.from(predictions).map(val => Math.exp(val - maxProb));
+    const sumExp = expValues.reduce((a, b) => a + b, 0);
+    const confidence = expValues[predictedClass] / sumExp;
+    
+    return [predictedClass, confidence];
+  } catch (error) {
+    console.error("Error in ONNX inference:", error);
+    throw error;
+  }
+};
+
+/**
+ * Detect keypoints using MoveNet
+ */
+const detectKeypoints = async (image: HTMLVideoElement): Promise<number[][]> => {
+  if (!movenetModel) {
+    throw new Error("MoveNet model not initialized");
+  }
   
-  // Generate a random prediction (this would be replaced with actual model inference)
-  const predictedClass = Math.floor(Math.random() * (Object.keys(classMapping).length));
-  const confidence = 0.7 + Math.random() * 0.3; // Random confidence between 0.7 and 1.0
-  
-  return [predictedClass, confidence];
+  try {
+    // Convert video to tensor
+    const videoWidth = image.videoWidth;
+    const videoHeight = image.videoHeight;
+    
+    // Process the image with MoveNet
+    const imageTensor = tf.browser.fromPixels(image);
+    
+    // Resize and normalize the image as required by MoveNet
+    const resized = tf.image.resizeBilinear(imageTensor, [192, 192]);
+    const normalized = tf.div(resized, 127.5).sub(1.0);
+    const batched = tf.expandDims(normalized);
+    
+    // Run MoveNet inference
+    const results = await movenetModel.predict(batched);
+    
+    // Clean up tensors
+    imageTensor.dispose();
+    resized.dispose();
+    normalized.dispose();
+    batched.dispose();
+    
+    // Extract keypoints from results
+    const keypoints = await results.array();
+    results.dispose();
+    
+    // Format keypoints to match our expected format
+    // MoveNet returns keypoints as [y, x, confidence]
+    // We need to convert to our format [y, x, confidence]
+    const formattedKeypoints = keypoints[0].map((keypoint: number[]) => {
+      return [keypoint[0], keypoint[1], keypoint[2]];
+    });
+    
+    return formattedKeypoints;
+  } catch (error) {
+    console.error("Error detecting keypoints:", error);
+    throw error;
+  }
 };
 
 /**
@@ -162,31 +279,12 @@ export const detectPoseFromFrame = async (video: HTMLVideoElement): Promise<{
   isCorrect: boolean;
 }> => {
   try {
-    if (!session) {
-      throw new Error("ONNX model not initialized");
+    if (!session || !movenetModel) {
+      throw new Error("Models not initialized");
     }
     
-    // Capture the current frame from the video
-    const canvas = document.createElement('canvas');
-    const ctx = canvas.getContext('2d');
-    
-    if (!ctx) {
-      throw new Error("Could not create canvas context");
-    }
-    
-    // Set canvas dimensions to match video
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-    
-    // Draw the current video frame on the canvas
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    
-    // Get image data
-    const imageData = canvas.toDataURL('image/jpeg', 0.8);
-    
-    // Get keypoints using our mock service (in a real app, you'd use TensorFlow.js or MoveNet)
-    const keypointsData = await detectKeypoints(imageData);
-    const keypoints = keypointsData.keypoints;
+    // Detect keypoints using MoveNet
+    const keypoints = await detectKeypoints(video);
     
     // Check keypoint visibility
     if (!checkKeypointVisibility(keypoints)) {

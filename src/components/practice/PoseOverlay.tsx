@@ -48,6 +48,7 @@ export const PoseOverlay: React.FC<PoseOverlayProps> = memo(({ keypoints, videoW
       
       // Only draw if both points have sufficient confidence
       if (startPoint[2] > KEYPOINT_THRESHOLD && endPoint[2] > KEYPOINT_THRESHOLD) {
+        // MoveNet keypoints are [y, x, confidence] but we need [x, y] for SVG
         const x1 = startPoint[1] * videoWidth;
         const y1 = startPoint[0] * videoHeight;
         const x2 = endPoint[1] * videoWidth;
@@ -63,7 +64,7 @@ export const PoseOverlay: React.FC<PoseOverlayProps> = memo(({ keypoints, videoW
       // Only draw keypoints with sufficient confidence
       if (confidence > KEYPOINT_THRESHOLD) {
         validKps.push({
-          cx: point[1] * videoWidth,
+          cx: point[1] * videoWidth,  // MoveNet format: [y, x, confidence]
           cy: point[0] * videoHeight,
           r: 3,
           key: `keypoint-${idx}`,
