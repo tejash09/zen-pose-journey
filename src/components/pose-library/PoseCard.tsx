@@ -2,8 +2,11 @@
 import React from "react";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { motion } from "framer-motion";
 import { YogaPose } from "@/types/yoga";
+import { Link } from "react-router-dom";
+import { Info } from "lucide-react";
 
 interface PoseCardProps {
   pose: YogaPose;
@@ -43,8 +46,14 @@ export const PoseCard = ({ pose, index }: PoseCardProps) => {
         <CardContent className="flex-grow">
           <p className="text-gray-600 text-sm">{pose.description}</p>
         </CardContent>
-        <CardFooter className="pt-2 flex justify-between">
-          <span className="text-sm text-gray-500">Benefits: {pose.benefits.join(", ")}</span>
+        <CardFooter className="pt-2 flex justify-between items-center">
+          <span className="text-xs text-gray-500">Benefits: {pose.benefits.join(", ")}</span>
+          <Button variant="ghost" size="sm" asChild>
+            <Link to={`/pose-guide/${pose.id}`} className="flex items-center gap-1">
+              <Info className="h-4 w-4" />
+              Guide
+            </Link>
+          </Button>
         </CardFooter>
       </Card>
     </motion.div>
