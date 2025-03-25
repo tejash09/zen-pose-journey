@@ -17,6 +17,7 @@ import {
   cleanupWebSocket 
 } from "@/services/poseDetectionService";
 import { websocketService } from "@/services/websocketService";
+import { yogaPoses } from "@/data/yogaPoses";
 
 const Practice = () => {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -30,6 +31,7 @@ const Practice = () => {
     confidence: 0,
     duration: 0,
   });
+  const [currentPoseReference, setCurrentPoseReference] = useState(null);
   const [apiStatus, setApiStatus] = useState<"loading" | "ready" | "error">("loading");
   const [currentKeypoints, setCurrentKeypoints] = useState<number[][] | null>(null);
   const [availablePoses, setAvailablePoses] = useState<string[]>([]);
@@ -37,11 +39,9 @@ const Practice = () => {
   const isDetecting = useRef<boolean>(false);
   const [usingWebsocket, setUsingWebsocket] = useState<boolean>(false);
   
-  // Setup WebSocket message handler
   useEffect(() => {
     const unsubscribe = websocketService.on('message', (data) => {
       if (data.pose_name && data.keypoints && isActive) {
-        // Process pose data from WebSocket
         handlePoseResult(data);
       }
     });
@@ -52,7 +52,6 @@ const Practice = () => {
     };
   }, [isActive]);
   
-  // Check API health and load models when component mounts
   useEffect(() => {
     const initializeApi = async () => {
       try {
@@ -68,7 +67,6 @@ const Practice = () => {
               description: `${poses.length} poses available for detection`
             });
           } else {
-            // Models already loaded, just get the available poses
             const poses = await loadModels();
             setAvailablePoses(poses);
           }
@@ -88,14 +86,11 @@ const Practice = () => {
     initializeApi();
   }, []);
   
-  // Process pose detection results
   const handlePoseResult = useCallback((result: any) => {
-    // Skip if throttled
     if (result.pose_name === "throttled") {
       return;
     }
     
-    // Save keypoints for visualization
     if (result.keypoints) {
       setCurrentKeypoints(result.keypoints);
     }
@@ -113,11 +108,22 @@ const Practice = () => {
         toast.info(`Detected: ${poseName}`, {
           description: `Confidence: ${confidence}%`
         });
+        
+        const poseId = getPoseIdFromName(poseName);
+        if (poseId) {
+          setCurrentPoseReference(poseId);
+        } else {
+          setCurrentPoseReference(null);
+        }
       }
       
-      // Update the last detected pose name
       if (poseName !== "Not enough keypoints visible") {
         setLastPoseName(poseName);
+        
+        const poseId = getPoseIdFromName(poseName);
+        if (poseId && !currentPoseReference) {
+          setCurrentPoseReference(poseId);
+        }
       }
       
       return {
@@ -126,31 +132,47 @@ const Practice = () => {
         duration: newDuration
       };
     });
-  }, [lastPoseName]);
+  }, [lastPoseName, currentPoseReference]);
   
-  // Real pose detection using the API
+  const getPoseIdFromName = (detectedPoseName) => {
+    if (detectedPoseName === "Not enough keypoints visible" || 
+        detectedPoseName === "Waiting for pose..." ||
+        !detectedPoseName) {
+      return null;
+    }
+    
+    const exactMatch = yogaPoses.find(pose => 
+      pose.name.toLowerCase() === detectedPoseName.toLowerCase()
+    );
+    
+    if (exactMatch) return exactMatch.id;
+    
+    const partialMatch = yogaPoses.find(pose => 
+      detectedPoseName.toLowerCase().includes(pose.name.toLowerCase()) ||
+      pose.name.toLowerCase().includes(detectedPoseName.toLowerCase())
+    );
+    
+    return partialMatch ? partialMatch.id : null;
+  };
+  
   const detectPoseFromVideo = useCallback(async () => {
     if (!isActive || !videoRef.current || apiStatus !== "ready" || isDetecting.current) return;
     
     isDetecting.current = true;
     
     try {
-      // Capture the current video frame with reduced quality and size
       const imageData = captureVideoFrame(videoRef.current, 0.6, 0.5);
       if (!imageData) {
         isDetecting.current = false;
         return;
       }
       
-      // For WebSocket, just send the image data
       if (usingWebsocket) {
-        // WebSocket handler will process the response
         websocketService.sendMessage({ image: imageData });
         isDetecting.current = false;
         return;
       }
       
-      // Fallback to HTTP API for detection
       const result = await detectPose(imageData);
       handlePoseResult(result);
     } catch (error) {
@@ -165,7 +187,6 @@ const Practice = () => {
     }
   }, [isActive, apiStatus, handlePoseResult, usingWebsocket]);
   
-  // Animation frame based detection (more responsive than setInterval)
   const animationFrameCallback = useCallback(() => {
     detectPoseFromVideo();
     if (isActive) {
@@ -173,7 +194,6 @@ const Practice = () => {
     }
   }, [detectPoseFromVideo, isActive]);
   
-  // Session timer
   useEffect(() => {
     let interval: number | null = null;
     
@@ -188,7 +208,6 @@ const Practice = () => {
     };
   }, [isActive]);
   
-  // Setup pose detection with requestAnimationFrame
   useEffect(() => {
     if (isActive && apiStatus === "ready") {
       requestRef.current = requestAnimationFrame(animationFrameCallback);
@@ -338,7 +357,10 @@ const Practice = () => {
                 <TabsTrigger value="stats">Session Stats</TabsTrigger>
               </TabsList>
               <TabsContent value="pose" className="mt-4">
-                <PoseInfo pose={currentPose} />
+                <PoseInfo 
+                  pose={currentPose} 
+                  poseReferenceId={currentPoseReference}
+                />
               </TabsContent>
               <TabsContent value="stats" className="mt-4">
                 <div className="bg-white p-6 rounded-lg shadow-sm border">
