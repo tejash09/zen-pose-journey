@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import Layout from "@/components/layout/Layout";
 import { WebcamView } from "@/components/practice/WebcamView";
@@ -10,7 +9,14 @@ import { motion } from "framer-motion";
 import { Play, Pause, RefreshCw, Settings } from "lucide-react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
-import { checkApiHealth, loadModels, detectPose, captureVideoFrame } from "@/services/poseDetectionService";
+import { 
+  checkApiHealth, 
+  loadModels, 
+  detectPose, 
+  captureVideoFrame, 
+  cleanupWebSocket 
+} from "@/services/poseDetectionService";
+import { websocketService } from "@/services/websocketService";
 
 const Practice = () => {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -29,6 +35,22 @@ const Practice = () => {
   const [availablePoses, setAvailablePoses] = useState<string[]>([]);
   const [lastPoseName, setLastPoseName] = useState<string>("");
   const isDetecting = useRef<boolean>(false);
+  const [usingWebsocket, setUsingWebsocket] = useState<boolean>(false);
+  
+  // Setup WebSocket message handler
+  useEffect(() => {
+    const unsubscribe = websocketService.on('message', (data) => {
+      if (data.pose_name && data.keypoints && isActive) {
+        // Process pose data from WebSocket
+        handlePoseResult(data);
+      }
+    });
+    
+    return () => {
+      unsubscribe();
+      cleanupWebSocket();
+    };
+  }, [isActive]);
   
   // Check API health and load models when component mounts
   useEffect(() => {
@@ -36,6 +58,8 @@ const Practice = () => {
       try {
         const health = await checkApiHealth();
         if (health.status === "healthy") {
+          setUsingWebsocket(health.usingWebsocket);
+          
           if (!health.modelsLoaded) {
             toast.info("Loading pose detection models...");
             const poses = await loadModels();
@@ -64,6 +88,46 @@ const Practice = () => {
     initializeApi();
   }, []);
   
+  // Process pose detection results
+  const handlePoseResult = useCallback((result: any) => {
+    // Skip if throttled
+    if (result.pose_name === "throttled") {
+      return;
+    }
+    
+    // Save keypoints for visualization
+    if (result.keypoints) {
+      setCurrentKeypoints(result.keypoints);
+    }
+    
+    const poseName = result.pose_name;
+    const confidence = Math.round(result.confidence * 100);
+    
+    setCurrentPose(prev => {
+      const isNewPose = poseName !== lastPoseName && poseName !== "Not enough keypoints visible";
+      const newDuration = isNewPose ? 0 : prev.duration + 1;
+      
+      if (isNewPose && lastPoseName && lastPoseName !== "Not enough keypoints visible" && lastPoseName !== "Waiting for pose...") {
+        setPosesDetected(count => count + 1);
+        setTotalConfidence(total => total + confidence);
+        toast.info(`Detected: ${poseName}`, {
+          description: `Confidence: ${confidence}%`
+        });
+      }
+      
+      // Update the last detected pose name
+      if (poseName !== "Not enough keypoints visible") {
+        setLastPoseName(poseName);
+      }
+      
+      return {
+        name: poseName,
+        confidence: confidence,
+        duration: newDuration
+      };
+    });
+  }, [lastPoseName]);
+  
   // Real pose detection using the API
   const detectPoseFromVideo = useCallback(async () => {
     if (!isActive || !videoRef.current || apiStatus !== "ready" || isDetecting.current) return;
@@ -78,52 +142,17 @@ const Practice = () => {
         return;
       }
       
-      // Send to API for detection
+      // For WebSocket, just send the image data
+      if (usingWebsocket) {
+        // WebSocket handler will process the response
+        websocketService.sendMessage({ image: imageData });
+        isDetecting.current = false;
+        return;
+      }
+      
+      // Fallback to HTTP API for detection
       const result = await detectPose(imageData);
-      
-      if (result.error) {
-        console.error("Error detecting pose:", result.error);
-        isDetecting.current = false;
-        return;
-      }
-      
-      // Skip if throttled
-      if (result.pose_name === "throttled") {
-        isDetecting.current = false;
-        return;
-      }
-      
-      // Save keypoints for visualization
-      if (result.keypoints) {
-        setCurrentKeypoints(result.keypoints);
-      }
-      
-      const poseName = result.pose_name;
-      const confidence = Math.round(result.confidence * 100);
-      
-      setCurrentPose(prev => {
-        const isNewPose = poseName !== lastPoseName && poseName !== "Not enough keypoints visible";
-        const newDuration = isNewPose ? 0 : prev.duration + 1;
-        
-        if (isNewPose && lastPoseName && lastPoseName !== "Not enough keypoints visible" && lastPoseName !== "Waiting for pose...") {
-          setPosesDetected(count => count + 1);
-          setTotalConfidence(total => total + confidence);
-          toast.info(`Detected: ${poseName}`, {
-            description: `Confidence: ${confidence}%`
-          });
-        }
-        
-        // Update the last detected pose name
-        if (poseName !== "Not enough keypoints visible") {
-          setLastPoseName(poseName);
-        }
-        
-        return {
-          name: poseName,
-          confidence: confidence,
-          duration: newDuration
-        };
-      });
+      handlePoseResult(result);
     } catch (error) {
       console.error("Error in pose detection:", error);
       if (isActive) {
@@ -134,7 +163,7 @@ const Practice = () => {
     } finally {
       isDetecting.current = false;
     }
-  }, [isActive, apiStatus, lastPoseName]);
+  }, [isActive, apiStatus, handlePoseResult, usingWebsocket]);
   
   // Animation frame based detection (more responsive than setInterval)
   const animationFrameCallback = useCallback(() => {
@@ -186,7 +215,7 @@ const Practice = () => {
     
     if (!isActive) {
       toast.success("Session started", {
-        description: "Move slowly and hold poses for accurate detection"
+        description: `Using ${usingWebsocket ? 'WebSocket' : 'HTTP'} for pose detection`
       });
     } else {
       toast.info("Session paused");
@@ -201,7 +230,7 @@ const Practice = () => {
     setTotalConfidence(0);
     setCurrentPose({
       name: "Waiting for pose...",
-    confidence: 0,
+      confidence: 0,
       duration: 0,
     });
     setCurrentKeypoints(null);
@@ -249,6 +278,11 @@ const Practice = () => {
           {apiStatus === "loading" && (
             <div className="mt-4 p-3 bg-yellow-100 text-yellow-800 rounded-md">
               <p className="font-medium">Connecting to pose detection API...</p>
+            </div>
+          )}
+          {apiStatus === "ready" && (
+            <div className="mt-4 p-2 bg-green-100 text-green-800 rounded-md">
+              <p className="font-medium">Connected to pose detection API using {usingWebsocket ? 'WebSocket' : 'HTTP'}</p>
             </div>
           )}
         </motion.div>
