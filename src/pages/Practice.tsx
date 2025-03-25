@@ -9,15 +9,9 @@ import { motion } from "framer-motion";
 import { Play, Pause, RefreshCw, Settings } from "lucide-react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
-import { 
-  checkApiHealth, 
-  loadModels, 
-  detectPose, 
-  captureVideoFrame, 
-  cleanupWebSocket 
-} from "@/services/poseDetectionService";
-import { websocketService } from "@/services/websocketService";
+import { captureVideoFrame } from "@/services/poseDetectionService";
 import { yogaPoses } from "@/data/yogaPoses";
+import { initializeOnnxModel, detectPoseFromFrame, checkKeypointVisibility } from "@/services/onnxPoseService";
 
 const Practice = () => {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -32,71 +26,66 @@ const Practice = () => {
     duration: 0,
   });
   const [currentPoseReference, setCurrentPoseReference] = useState(null);
-  const [apiStatus, setApiStatus] = useState<"loading" | "ready" | "error">("loading");
+  const [modelStatus, setModelStatus] = useState<"loading" | "ready" | "error">("loading");
   const [currentKeypoints, setCurrentKeypoints] = useState<number[][] | null>(null);
   const [availablePoses, setAvailablePoses] = useState<string[]>([]);
   const [lastPoseName, setLastPoseName] = useState<string>("");
   const isDetecting = useRef<boolean>(false);
-  const [usingWebsocket, setUsingWebsocket] = useState<boolean>(false);
   
   useEffect(() => {
-    const unsubscribe = websocketService.on('message', (data) => {
-      if (data.pose_name && data.keypoints && isActive) {
-        handlePoseResult(data);
-      }
-    });
-    
-    return () => {
-      unsubscribe();
-      cleanupWebSocket();
-    };
-  }, [isActive]);
-  
-  useEffect(() => {
-    const initializeApi = async () => {
+    const loadModel = async () => {
       try {
-        const health = await checkApiHealth();
-        if (health.status === "healthy") {
-          setUsingWebsocket(health.usingWebsocket);
-          
-          if (!health.modelsLoaded) {
-            toast.info("Loading pose detection models...");
-            const poses = await loadModels();
-            setAvailablePoses(poses);
-            toast.success("Pose detection models loaded", {
-              description: `${poses.length} poses available for detection`
-            });
-          } else {
-            const poses = await loadModels();
-            setAvailablePoses(poses);
-          }
-          setApiStatus("ready");
-        } else {
-          throw new Error("API is not healthy");
-        }
+        setModelStatus("loading");
+        const poses = await initializeOnnxModel();
+        setAvailablePoses(poses);
+        setModelStatus("ready");
       } catch (error) {
-        console.error("Error initializing API:", error);
-        setApiStatus("error");
-        toast.error("Failed to connect to pose detection API", {
-          description: "Please ensure the Python API is running on your server"
+        console.error("Error initializing ONNX model:", error);
+        setModelStatus("error");
+        toast.error("Failed to load pose detection model", {
+          description: "Please check console for details"
         });
       }
     };
     
-    initializeApi();
+    loadModel();
   }, []);
   
-  const handlePoseResult = useCallback((result: any) => {
-    if (result.pose_name === "throttled") {
-      return;
+  const getPoseIdFromName = (detectedPoseName) => {
+    if (detectedPoseName === "Not enough keypoints visible" || 
+        detectedPoseName === "Waiting for pose..." ||
+        !detectedPoseName) {
+      return null;
     }
+    
+    const exactMatch = yogaPoses.find(pose => 
+      pose.name.toLowerCase() === detectedPoseName.toLowerCase()
+    );
+    
+    if (exactMatch) return exactMatch.id;
+    
+    const partialMatch = yogaPoses.find(pose => 
+      detectedPoseName.toLowerCase().includes(pose.name.toLowerCase()) ||
+      pose.name.toLowerCase().includes(detectedPoseName.toLowerCase())
+    );
+    
+    return partialMatch ? partialMatch.id : null;
+  };
+  
+  const handlePoseResult = useCallback((result: {
+    poseName: string;
+    confidence: number;
+    keypoints: number[][];
+    isCorrect: boolean;
+  }) => {
+    if (!result) return;
     
     if (result.keypoints) {
       setCurrentKeypoints(result.keypoints);
     }
     
-    const poseName = result.pose_name;
-    const confidence = Math.round(result.confidence * 100);
+    const poseName = result.poseName;
+    const confidence = Math.round(result.confidence);
     
     setCurrentPose(prev => {
       const isNewPose = poseName !== lastPoseName && poseName !== "Not enough keypoints visible";
@@ -134,46 +123,13 @@ const Practice = () => {
     });
   }, [lastPoseName, currentPoseReference]);
   
-  const getPoseIdFromName = (detectedPoseName) => {
-    if (detectedPoseName === "Not enough keypoints visible" || 
-        detectedPoseName === "Waiting for pose..." ||
-        !detectedPoseName) {
-      return null;
-    }
-    
-    const exactMatch = yogaPoses.find(pose => 
-      pose.name.toLowerCase() === detectedPoseName.toLowerCase()
-    );
-    
-    if (exactMatch) return exactMatch.id;
-    
-    const partialMatch = yogaPoses.find(pose => 
-      detectedPoseName.toLowerCase().includes(pose.name.toLowerCase()) ||
-      pose.name.toLowerCase().includes(detectedPoseName.toLowerCase())
-    );
-    
-    return partialMatch ? partialMatch.id : null;
-  };
-  
   const detectPoseFromVideo = useCallback(async () => {
-    if (!isActive || !videoRef.current || apiStatus !== "ready" || isDetecting.current) return;
+    if (!isActive || !videoRef.current || modelStatus !== "ready" || isDetecting.current) return;
     
     isDetecting.current = true;
     
     try {
-      const imageData = captureVideoFrame(videoRef.current, 0.6, 0.5);
-      if (!imageData) {
-        isDetecting.current = false;
-        return;
-      }
-      
-      if (usingWebsocket) {
-        websocketService.sendMessage({ image: imageData });
-        isDetecting.current = false;
-        return;
-      }
-      
-      const result = await detectPose(imageData);
+      const result = await detectPoseFromFrame(videoRef.current);
       handlePoseResult(result);
     } catch (error) {
       console.error("Error in pose detection:", error);
@@ -185,7 +141,7 @@ const Practice = () => {
     } finally {
       isDetecting.current = false;
     }
-  }, [isActive, apiStatus, handlePoseResult, usingWebsocket]);
+  }, [isActive, modelStatus, handlePoseResult]);
   
   const animationFrameCallback = useCallback(() => {
     detectPoseFromVideo();
@@ -209,7 +165,7 @@ const Practice = () => {
   }, [isActive]);
   
   useEffect(() => {
-    if (isActive && apiStatus === "ready") {
+    if (isActive && modelStatus === "ready") {
       requestRef.current = requestAnimationFrame(animationFrameCallback);
     } else if (requestRef.current !== null) {
       cancelAnimationFrame(requestRef.current);
@@ -222,19 +178,19 @@ const Practice = () => {
         requestRef.current = null;
       }
     };
-  }, [isActive, animationFrameCallback, apiStatus]);
+  }, [isActive, animationFrameCallback, modelStatus]);
   
   const toggleActive = () => {
-    if (apiStatus !== "ready") {
-      toast.error("Pose detection API not ready", {
-        description: "Please ensure the Python API is running on your server"
+    if (modelStatus !== "ready") {
+      toast.error("Pose detection model not ready", {
+        description: "Please wait for the model to load"
       });
       return;
     }
     
     if (!isActive) {
       toast.success("Session started", {
-        description: `Using ${usingWebsocket ? 'WebSocket' : 'HTTP'} for pose detection`
+        description: "Using ONNX model for local pose detection"
       });
     } else {
       toast.info("Session paused");
@@ -288,20 +244,22 @@ const Practice = () => {
           <p className="text-lg text-gray-600 max-w-2xl mx-auto">
             Use your webcam to get real-time feedback on your yoga poses. Position yourself in view of the camera and strike a pose.
           </p>
-          {apiStatus === "error" && (
+          {modelStatus === "error" && (
             <div className="mt-4 p-3 bg-red-100 text-red-800 rounded-md">
-              <p className="font-medium">Pose detection API not connected</p>
-              <p className="text-sm">Please ensure the Python API is running on your server</p>
+              <p className="font-medium">Pose detection model failed to load</p>
+              <p className="text-sm">Please check the console for more details</p>
             </div>
           )}
-          {apiStatus === "loading" && (
+          {modelStatus === "loading" && (
             <div className="mt-4 p-3 bg-yellow-100 text-yellow-800 rounded-md">
-              <p className="font-medium">Connecting to pose detection API...</p>
+              <p className="font-medium">Loading pose detection model...</p>
+              <p className="text-sm">This may take a moment depending on your connection speed</p>
             </div>
           )}
-          {apiStatus === "ready" && (
+          {modelStatus === "ready" && (
             <div className="mt-4 p-2 bg-green-100 text-green-800 rounded-md">
-              <p className="font-medium">Connected to pose detection API using {usingWebsocket ? 'WebSocket' : 'HTTP'}</p>
+              <p className="font-medium">Pose detection model loaded successfully!</p>
+              <p className="text-sm">Model is running locally in your browser</p>
             </div>
           )}
         </motion.div>
@@ -323,7 +281,7 @@ const Practice = () => {
               <Button 
                 onClick={toggleActive}
                 className={isActive ? "bg-red-500 hover:bg-red-600" : "bg-sage-400 hover:bg-sage-500"}
-                disabled={apiStatus !== "ready"}
+                disabled={modelStatus !== "ready"}
               >
                 {isActive ? <Pause className="mr-2 h-4 w-4" /> : <Play className="mr-2 h-4 w-4" />}
                 {isActive ? "Pause" : "Start"}

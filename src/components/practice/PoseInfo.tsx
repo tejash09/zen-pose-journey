@@ -91,6 +91,7 @@ export const PoseInfo: React.FC<PoseInfoProps> = ({ pose, poseReferenceId }) => 
             <li>• Ensure good lighting in your practice area</li>
             <li>• Position yourself so your full body is visible</li>
             <li>• Move slowly and hold poses steadily</li>
+            <li>• Try to maintain at least 70% confidence for best results</li>
           </ul>
         </div>
       </div>
