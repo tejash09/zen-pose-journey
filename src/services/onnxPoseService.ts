@@ -35,21 +35,12 @@ export const initializeOnnxModel = async (): Promise<string[]> => {
         graphOptimizationLevel: 'all'
       };
       
-      // Load the model from the public directory using fetch first, then pass as arrayBuffer
-      const modelResponse = await fetch('/yoga_pose_classifier.onnx');
-      
-      if (!modelResponse.ok) {
-        throw new Error(`Failed to load ONNX model file: ${modelResponse.statusText}`);
-      }
-      
-      const modelArrayBuffer = await modelResponse.arrayBuffer();
-      
-      // Create model from the array buffer
+      // Load the model from the public directory
       session = await ort.InferenceSession.create(
-        new Uint8Array(modelArrayBuffer), 
+        '/yoga_pose_classifier.onnx', 
         options
       );
-      console.log("ONNX model loaded successfully");
+      console.log("ONNX model loaded");
     } catch (error) {
       console.error("Error loading ONNX model:", error);
       throw new Error(`Failed to load ONNX model: ${error.message}`);
