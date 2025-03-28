@@ -7,7 +7,6 @@ import { BrowserRouter, Routes, Route } from "react-router-dom";
 import Index from "./pages/Index";
 import Practice from "./pages/Practice";
 import PoseLibrary from "./pages/PoseLibrary";
-import PoseGuidePage from "./pages/PoseGuidePage";
 import Settings from "./pages/Settings";
 import NotFound from "./pages/NotFound";
 import Layout from "./components/layout/Layout";
@@ -24,7 +23,6 @@ const App = () => (
           <Route path="/" element={<Index />} />
           <Route path="/practice" element={<Practice />} />
           <Route path="/pose-library" element={<PoseLibrary />} />
-          <Route path="/pose-guide/:poseId" element={<PoseGuidePage />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="*" element={<NotFound />} />
         </Routes>

@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import Layout from "@/components/layout/Layout";
 import { WebcamView } from "@/components/practice/WebcamView";
@@ -9,9 +10,7 @@ import { motion } from "framer-motion";
 import { Play, Pause, RefreshCw, Settings } from "lucide-react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
-import { captureVideoFrame } from "@/services/poseDetectionService";
-import { yogaPoses } from "@/data/yogaPoses";
-import { initializeOnnxModel, detectPoseFromFrame, checkKeypointVisibility } from "@/services/onnxPoseService";
+import { checkApiHealth, loadModels, detectPose, captureVideoFrame } from "@/services/poseDetectionService";
 
 const Practice = () => {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -25,112 +24,106 @@ const Practice = () => {
     confidence: 0,
     duration: 0,
   });
-  const [currentPoseReference, setCurrentPoseReference] = useState(null);
-  const [modelStatus, setModelStatus] = useState<"loading" | "ready" | "error">("loading");
+  const [apiStatus, setApiStatus] = useState<"loading" | "ready" | "error">("loading");
   const [currentKeypoints, setCurrentKeypoints] = useState<number[][] | null>(null);
   const [availablePoses, setAvailablePoses] = useState<string[]>([]);
   const [lastPoseName, setLastPoseName] = useState<string>("");
   const isDetecting = useRef<boolean>(false);
   
+  // Check API health and load models when component mounts
   useEffect(() => {
-    const loadModel = async () => {
+    const initializeApi = async () => {
       try {
-        setModelStatus("loading");
-        const poses = await initializeOnnxModel();
-        setAvailablePoses(poses);
-        setModelStatus("ready");
+        const health = await checkApiHealth();
+        if (health.status === "healthy") {
+          if (!health.modelsLoaded) {
+            toast.info("Loading pose detection models...");
+            const poses = await loadModels();
+            setAvailablePoses(poses);
+            toast.success("Pose detection models loaded", {
+              description: `${poses.length} poses available for detection`
+            });
+          } else {
+            // Models already loaded, just get the available poses
+            const poses = await loadModels();
+            setAvailablePoses(poses);
+          }
+          setApiStatus("ready");
+        } else {
+          throw new Error("API is not healthy");
+        }
       } catch (error) {
-        console.error("Error initializing ONNX model:", error);
-        setModelStatus("error");
-        toast.error("Failed to load pose detection model", {
-          description: "Please check console for details"
+        console.error("Error initializing API:", error);
+        setApiStatus("error");
+        toast.error("Failed to connect to pose detection API", {
+          description: "Please ensure the Python API is running on your server"
         });
       }
     };
     
-    loadModel();
+    initializeApi();
   }, []);
   
-  const getPoseIdFromName = (detectedPoseName) => {
-    if (detectedPoseName === "Not enough keypoints visible" || 
-        detectedPoseName === "Waiting for pose..." ||
-        !detectedPoseName) {
-      return null;
-    }
-    
-    const exactMatch = yogaPoses.find(pose => 
-      pose.name.toLowerCase() === detectedPoseName.toLowerCase()
-    );
-    
-    if (exactMatch) return exactMatch.id;
-    
-    const partialMatch = yogaPoses.find(pose => 
-      detectedPoseName.toLowerCase().includes(pose.name.toLowerCase()) ||
-      pose.name.toLowerCase().includes(detectedPoseName.toLowerCase())
-    );
-    
-    return partialMatch ? partialMatch.id : null;
-  };
-  
-  const handlePoseResult = useCallback((result: {
-    poseName: string;
-    confidence: number;
-    keypoints: number[][];
-    isCorrect: boolean;
-  }) => {
-    if (!result) return;
-    
-    if (result.keypoints) {
-      setCurrentKeypoints(result.keypoints);
-    }
-    
-    const poseName = result.poseName;
-    const confidence = Math.round(result.confidence);
-    
-    setCurrentPose(prev => {
-      const isNewPose = poseName !== lastPoseName && poseName !== "Not enough keypoints visible";
-      const newDuration = isNewPose ? 0 : prev.duration + 1;
-      
-      if (isNewPose && lastPoseName && lastPoseName !== "Not enough keypoints visible" && lastPoseName !== "Waiting for pose...") {
-        setPosesDetected(count => count + 1);
-        setTotalConfidence(total => total + confidence);
-        toast.info(`Detected: ${poseName}`, {
-          description: `Confidence: ${confidence}%`
-        });
-        
-        const poseId = getPoseIdFromName(poseName);
-        if (poseId) {
-          setCurrentPoseReference(poseId);
-        } else {
-          setCurrentPoseReference(null);
-        }
-      }
-      
-      if (poseName !== "Not enough keypoints visible") {
-        setLastPoseName(poseName);
-        
-        const poseId = getPoseIdFromName(poseName);
-        if (poseId && !currentPoseReference) {
-          setCurrentPoseReference(poseId);
-        }
-      }
-      
-      return {
-        name: poseName,
-        confidence: confidence,
-        duration: newDuration
-      };
-    });
-  }, [lastPoseName, currentPoseReference]);
-  
+  // Real pose detection using the API
   const detectPoseFromVideo = useCallback(async () => {
-    if (!isActive || !videoRef.current || modelStatus !== "ready" || isDetecting.current) return;
+    if (!isActive || !videoRef.current || apiStatus !== "ready" || isDetecting.current) return;
     
     isDetecting.current = true;
     
     try {
-      const result = await detectPoseFromFrame(videoRef.current);
-      handlePoseResult(result);
+      // Capture the current video frame with reduced quality and size
+      const imageData = captureVideoFrame(videoRef.current, 0.6, 0.5);
+      if (!imageData) {
+        isDetecting.current = false;
+        return;
+      }
+      
+      // Send to API for detection
+      const result = await detectPose(imageData);
+      
+      if (result.error) {
+        console.error("Error detecting pose:", result.error);
+        isDetecting.current = false;
+        return;
+      }
+      
+      // Skip if throttled
+      if (result.pose_name === "throttled") {
+        isDetecting.current = false;
+        return;
+      }
+      
+      // Save keypoints for visualization
+      if (result.keypoints) {
+        setCurrentKeypoints(result.keypoints);
+      }
+      
+      const poseName = result.pose_name;
+      const confidence = Math.round(result.confidence * 100);
+      
+      setCurrentPose(prev => {
+        const isNewPose = poseName !== lastPoseName && poseName !== "Not enough keypoints visible";
+        const newDuration = isNewPose ? 0 : prev.duration + 1;
+        
+        if (isNewPose && lastPoseName && lastPoseName !== "Not enough keypoints visible" && lastPoseName !== "Waiting for pose...") {
+          setPosesDetected(count => count + 1);
+          setTotalConfidence(total => total + confidence);
+          toast.info(`Detected: ${poseName}`, {
+            description: `Confidence: ${confidence}%`
+          });
+        }
+        
+        // Update the last detected pose name
+        if (poseName !== "Not enough keypoints visible") {
+          setLastPoseName(poseName);
+        }
+        
+        return {
+          name: poseName,
+          confidence: confidence,
+          duration: newDuration
+        };
+      });
     } catch (error) {
       console.error("Error in pose detection:", error);
       if (isActive) {
@@ -141,8 +134,9 @@ const Practice = () => {
     } finally {
       isDetecting.current = false;
     }
-  }, [isActive, modelStatus, handlePoseResult]);
+  }, [isActive, apiStatus, lastPoseName]);
   
+  // Animation frame based detection (more responsive than setInterval)
   const animationFrameCallback = useCallback(() => {
     detectPoseFromVideo();
     if (isActive) {
@@ -150,6 +144,7 @@ const Practice = () => {
     }
   }, [detectPoseFromVideo, isActive]);
   
+  // Session timer
   useEffect(() => {
     let interval: number | null = null;
     
@@ -164,8 +159,9 @@ const Practice = () => {
     };
   }, [isActive]);
   
+  // Setup pose detection with requestAnimationFrame
   useEffect(() => {
-    if (isActive && modelStatus === "ready") {
+    if (isActive && apiStatus === "ready") {
       requestRef.current = requestAnimationFrame(animationFrameCallback);
     } else if (requestRef.current !== null) {
       cancelAnimationFrame(requestRef.current);
@@ -178,19 +174,19 @@ const Practice = () => {
         requestRef.current = null;
       }
     };
-  }, [isActive, animationFrameCallback, modelStatus]);
+  }, [isActive, animationFrameCallback, apiStatus]);
   
   const toggleActive = () => {
-    if (modelStatus !== "ready") {
-      toast.error("Pose detection model not ready", {
-        description: "Please wait for the model to load"
+    if (apiStatus !== "ready") {
+      toast.error("Pose detection API not ready", {
+        description: "Please ensure the Python API is running on your server"
       });
       return;
     }
     
     if (!isActive) {
       toast.success("Session started", {
-        description: "Using ONNX model for local pose detection"
+        description: "Move slowly and hold poses for accurate detection"
       });
     } else {
       toast.info("Session paused");
@@ -205,7 +201,7 @@ const Practice = () => {
     setTotalConfidence(0);
     setCurrentPose({
       name: "Waiting for pose...",
-      confidence: 0,
+    confidence: 0,
       duration: 0,
     });
     setCurrentKeypoints(null);
@@ -244,22 +240,15 @@ const Practice = () => {
           <p className="text-lg text-gray-600 max-w-2xl mx-auto">
             Use your webcam to get real-time feedback on your yoga poses. Position yourself in view of the camera and strike a pose.
           </p>
-          {modelStatus === "error" && (
+          {apiStatus === "error" && (
             <div className="mt-4 p-3 bg-red-100 text-red-800 rounded-md">
-              <p className="font-medium">Pose detection model failed to load</p>
-              <p className="text-sm">Please check the console for more details</p>
+              <p className="font-medium">Pose detection API not connected</p>
+              <p className="text-sm">Please ensure the Python API is running on your server</p>
             </div>
           )}
-          {modelStatus === "loading" && (
+          {apiStatus === "loading" && (
             <div className="mt-4 p-3 bg-yellow-100 text-yellow-800 rounded-md">
-              <p className="font-medium">Loading pose detection model...</p>
-              <p className="text-sm">This may take a moment depending on your connection speed</p>
-            </div>
-          )}
-          {modelStatus === "ready" && (
-            <div className="mt-4 p-2 bg-green-100 text-green-800 rounded-md">
-              <p className="font-medium">Pose detection model loaded successfully!</p>
-              <p className="text-sm">Model is running locally in your browser</p>
+              <p className="font-medium">Connecting to pose detection API...</p>
             </div>
           )}
         </motion.div>
@@ -281,7 +270,7 @@ const Practice = () => {
               <Button 
                 onClick={toggleActive}
                 className={isActive ? "bg-red-500 hover:bg-red-600" : "bg-sage-400 hover:bg-sage-500"}
-                disabled={modelStatus !== "ready"}
+                disabled={apiStatus !== "ready"}
               >
                 {isActive ? <Pause className="mr-2 h-4 w-4" /> : <Play className="mr-2 h-4 w-4" />}
                 {isActive ? "Pause" : "Start"}
@@ -315,10 +304,7 @@ const Practice = () => {
                 <TabsTrigger value="stats">Session Stats</TabsTrigger>
               </TabsList>
               <TabsContent value="pose" className="mt-4">
-                <PoseInfo 
-                  pose={currentPose} 
-                  poseReferenceId={currentPoseReference}
-                />
+                <PoseInfo pose={currentPose} />
               </TabsContent>
               <TabsContent value="stats" className="mt-4">
                 <div className="bg-white p-6 rounded-lg shadow-sm border">
