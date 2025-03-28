@@ -77,7 +77,13 @@ export const detectPose = async (imageData: string): Promise<{
       throw new Error(data.error);
     }
     
-    return data;
+    return {
+      pose_name: data.pose_name,
+      confidence: data.confidence,
+      is_correct: data.is_correct,
+      keypoints: data.keypoints,
+      error: data.error
+    };
   } catch (error) {
     if ((error as Error).message === "Detection throttled") {
       // Silent failure for throttled requests

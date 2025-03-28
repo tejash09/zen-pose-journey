@@ -18,6 +18,11 @@ export const PoseInfo: React.FC<PoseInfoProps> = ({ pose }) => {
     return `${mins}:${secs < 10 ? "0" + secs : secs}`;
   };
 
+  // Format confidence to display percentage correctly
+  const displayConfidence = typeof pose.confidence === 'number' 
+    ? (pose.confidence > 1 ? pose.confidence : Math.round(pose.confidence * 100))
+    : 0;
+
   return (
     <Card className="p-6 bg-white shadow-sm">
       <h3 className="font-medium text-xl mb-4">Current Pose</h3>
@@ -31,9 +36,9 @@ export const PoseInfo: React.FC<PoseInfoProps> = ({ pose }) => {
         <div>
           <div className="flex justify-between mb-1">
             <p className="text-sm text-gray-500">Confidence</p>
-            <p className="text-sm font-medium">{pose.confidence}%</p>
+            <p className="text-sm font-medium">{displayConfidence}%</p>
           </div>
-          <Progress value={pose.confidence} className="h-2" />
+          <Progress value={displayConfidence} className="h-2" />
         </div>
         
         <div>

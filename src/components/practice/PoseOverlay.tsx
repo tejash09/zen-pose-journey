@@ -42,7 +42,9 @@ export const PoseOverlay: React.FC<PoseOverlayProps> = memo(({ keypoints, videoW
     const endPoint = keypoints[end];
     
     // Only draw if both points have sufficient confidence
-    if (startPoint[2] > KEYPOINT_THRESHOLD && endPoint[2] > KEYPOINT_THRESHOLD) {
+    if (startPoint && endPoint && startPoint[2] > KEYPOINT_THRESHOLD && endPoint[2] > KEYPOINT_THRESHOLD) {
+      // Use y, x coordinates (MoveNet format from Flask backend)
+      // Scale the coordinates to fit the video dimensions
       const x1 = startPoint[1] * videoWidth;
       const y1 = startPoint[0] * videoHeight;
       const x2 = endPoint[1] * videoWidth;
@@ -54,7 +56,7 @@ export const PoseOverlay: React.FC<PoseOverlayProps> = memo(({ keypoints, videoW
   
   return (
     <svg 
-      className="absolute top-0 left-0 w-full h-full"
+      className="absolute top-0 left-0 w-full h-full pointer-events-none"
       viewBox={`0 0 ${videoWidth} ${videoHeight}`}
       preserveAspectRatio="xMidYMid slice"
     >
@@ -63,9 +65,9 @@ export const PoseOverlay: React.FC<PoseOverlayProps> = memo(({ keypoints, videoW
         <path
           d={pathCommands.join(' ')}
           stroke="#4ade80"
-          strokeWidth="2"
+          strokeWidth="3"
           fill="none"
-          opacity="0.7"
+          opacity="0.8"
         />
       )}
       
@@ -74,15 +76,16 @@ export const PoseOverlay: React.FC<PoseOverlayProps> = memo(({ keypoints, videoW
         const confidence = point[2];
         // Only draw keypoints with sufficient confidence
         if (confidence > KEYPOINT_THRESHOLD) {
+          // Use y, x coordinates (MoveNet format from Flask backend)
           return (
             <circle
               key={`keypoint-${idx}`}
               cx={point[1] * videoWidth}
               cy={point[0] * videoHeight}
-              r="3"
+              r="4"
               fill="#22c55e"
               stroke="#ffffff"
-              strokeWidth="1"
+              strokeWidth="2"
             >
               <title>{getKeypointName(idx)}</title>
             </circle>
